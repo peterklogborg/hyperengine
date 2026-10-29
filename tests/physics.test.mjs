@@ -2,6 +2,7 @@
 import * as M from '../src/math4.js';
 import { Body } from '../src/body.js';
 import { World, populateDemo, CAGE } from '../src/world.js';
+import { sliceBoxSegments, sliceGlome } from '../src/render4.js';
 
 let failures = 0;
 function ok(name, cond, extra = '') {
@@ -171,6 +172,40 @@ console.log('\nstacking');
   ok('stack does not slide apart', drift < 0.12, `drift=${drift.toFixed(3)}`);
   ok('stack does not sink', top > 2.2, `top y=${top.toFixed(3)}`);
   ok('stack comes to rest', boxes.every((b) => M.len(b.vel) < 0.4));
+}
+
+// --- 8. 3D slice -----------------------------------------------------------
+console.log('\n4D slice');
+{
+  const cube = new Body({ shape: { type: 'hyperbox', half: [1, 1, 1, 1] }, pos: [0, 0, 0, 0] });
+  const segs = sliceBoxSegments(cube, 0);
+  ok('axis-aligned hyper-cube slices to a cube wireframe', segs.length === 12, `segments=${segs.length}`);
+  ok(
+    'slice points lie inside the hyper-cube',
+    segs.every((s) => s.every((p) => p.every((x) => Math.abs(x) <= 1.0001)))
+  );
+  ok('slice outside the body is empty', sliceBoxSegments(cube, 1.5).length === 0);
+
+  const rotated = new Body({
+    shape: { type: 'hyperbox', half: [1.4, 1.1, 0.9, 1.2] },
+    pos: [0.3, -0.2, 0.1, 0],
+    R: M.expSkew([0.7, -0.4, 0.9, 0.35, -0.6, 0.2], 1),
+  });
+  const rsegs = sliceBoxSegments(rotated, 0.15);
+  ok('rotated tesseract has a non-empty slice', rsegs.length > 0, `segments=${rsegs.length}`);
+  ok(
+    'rotated slice stays inside the body hull',
+    rsegs.every((s) => s.every((p) => p.every((x) => Math.abs(x) <= 3.2)))
+  );
+
+  const ball = new Body({ shape: { type: 'glome', radius: 2 }, pos: [0, 0, 0, 1.5] });
+  const cut = sliceGlome(ball, 0);
+  ok('glome slice is a 2-sphere', !!cut && near(cut.radius, Math.sqrt(4 - 2.25), 1e-9), cut && `r=${cut.radius}`);
+  ok('glome slice misses outside its radius', sliceGlome(ball, 4) === null);
+
+  const demo = populateDemo(new World());
+  const hit = demo.bodies.filter((b) => !b.noRender).filter((b) => b.shape.type === 'glome' ? sliceGlome(b, 0) : sliceBoxSegments(b, 0).length > 0);
+  ok('demo scene has geometry in the w=0 slice', hit.length > 0, `bodies=${hit.length}`);
 }
 
 function det4(m) {

@@ -17,6 +17,106 @@ const RING_SEGS = 26;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
+// The 24 square faces of the unit hyper-cube, as quads of vertex indices.
+// The slice view needs faces, not edges: intersecting a face with the hyperplane
+// w = sliceW yields the segments that make up the 3D cross-section.
+const UNIT_FACES = [];
+for (let a = 0; a < 4; a++) {
+  for (let b = a + 1; b < 4; b++) {
+    const rest = [0, 1, 2, 3].filter((k) => k !== a && k !== b);
+    const [c, d] = rest;
+    for (const sa of [-1, 1]) {
+      for (const sb of [-1, 1]) {
+        const base = ((sa > 0 ? 1 : 0) << a) | ((sb > 0 ? 1 : 0) << b);
+        UNIT_FACES.push([base, base | (1 << c), base | (1 << c) | (1 << d), base | (1 << d)]);
+      }
+    }
+  }
+}
+
+/** Clip a polygon of 4D points to sign * (w - sliceW) >= 0. */
+function clipHalf(poly, sign, sliceW) {
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const A = poly[i];
+    const B = poly[(i + 1) % poly.length];
+    const da = sign * (A[3] - sliceW);
+    const db = sign * (B[3] - sliceW);
+    if (da >= 0) out.push(A);
+    if (da > 0 !== db > 0) {
+      const t = da / (da - db);
+      out.push([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t, sliceW]);
+    }
+  }
+  return out;
+}
+
+/** Intersect a hyper-cube face with w = sliceW, as 3D points. */
+function clipFace(face, verts, sliceW) {
+  const quad = face.map((i) => verts[i]);
+  const poly = clipHalf(clipHalf(quad, 1, sliceW), -1, sliceW);
+  return poly.map((p) => [p[0], p[1], p[2]]);
+}
+
+const segKey = (a, b) => {
+  const f = (p) => `${p[0].toFixed(3)},${p[1].toFixed(3)},${p[2].toFixed(3)}`;
+  const ka = f(a);
+  const kb = f(b);
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+};
+
+/**
+ * Cross-section of a hyper-box with the hyperplane w = sliceW.
+ * Returns de-duplicated 3D segments (shared face edges are only drawn once).
+ */
+export function sliceBoxSegments(body, sliceW) {
+  const h = body.shape.half;
+  const R = body.R;
+  const pos = body.pos;
+  const verts = new Array(16);
+  for (let i = 0; i < 16; i++) {
+    const v = UNIT_VERTS[i];
+    const lx = v[0] * h[0];
+    const ly = v[1] * h[1];
+    const lz = v[2] * h[2];
+    const lw = v[3] * h[3];
+    verts[i] = [
+      pos[0] + R[0][0] * lx + R[0][1] * ly + R[0][2] * lz + R[0][3] * lw,
+      pos[1] + R[1][0] * lx + R[1][1] * ly + R[1][2] * lz + R[1][3] * lw,
+      pos[2] + R[2][0] * lx + R[2][1] * ly + R[2][2] * lz + R[2][3] * lw,
+      pos[3] + R[3][0] * lx + R[3][1] * ly + R[3][2] * lz + R[3][3] * lw,
+    ];
+  }
+
+  const seen = new Set();
+  const segs = [];
+  for (const face of UNIT_FACES) {
+    const poly = clipFace(face, verts, sliceW);
+    if (poly.length < 2) continue;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const key = segKey(a, b);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      segs.push([a, b]);
+    }
+  }
+  return segs;
+}
+
+/** Cross-section of a glome (3-sphere) with w = sliceW: a 2-sphere. */
+export function sliceGlome(body, sliceW) {
+  const r = body.shape.radius;
+  const dw = body.pos[3] - sliceW;
+  const r2 = r * r - dw * dw;
+  if (r2 <= 0) return null;
+  return {
+    center: [body.pos[0], body.pos[1], body.pos[2]],
+    radius: Math.sqrt(r2),
+  };
+}
+
 export class Renderer4 {
   constructor(canvas) {
     this.canvas = canvas;
@@ -42,6 +142,12 @@ export class Renderer4 {
     this.showCage = true;
     this.showAxes = true;
 
+    // 3D slice view: instead of projecting R^4 -> R^3, cut the world with the
+    // hyperplane w = sliceW and draw the cross-section as an ordinary 3D scene.
+    this.sliceMode = false;
+    this.sliceW = 0;
+    this.sliceDist3 = 26;
+
     this.W = 1;
     this.H = 1;
     this.dpr = 1;
@@ -64,6 +170,9 @@ export class Renderer4 {
     this.cx = w * 0.5;
     this.cy = h * 0.52;
     this.zoom = Math.min(w, h) * 0.3;
+    // The slice view has no 4D foreshortening to shrink the room, so its
+    // camera sits further back and uses a slightly tighter scale.
+    this.sliceZoom = Math.min(w, h) * 0.26;
   }
 
   /** Rotate the whole world in a set of 4D planes. */
@@ -133,6 +242,10 @@ export class Renderer4 {
   // --- frame ---------------------------------------------------------------
 
   draw(world) {
+    if (this.sliceMode) {
+      this.drawSlice(world);
+      return;
+    }
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
@@ -348,6 +461,194 @@ export class Renderer4 {
       ctx.stroke();
       ctx.fillStyle = `hsla(${ax.hue}, 95%, 78%, 0.8)`;
       ctx.fillText(ax.label, P.x + 4, P.y + 3);
+    }
+  }
+
+  // --- 3D slice view -------------------------------------------------------
+
+  /** Project a point that already lives in the slice's 3D space. */
+  project3(x, y, z) {
+    const x1 = this._cy * x + this._sy * z;
+    const z1 = -this._sy * x + this._cy * z;
+    const y1 = this._cp * y - this._sp * z1;
+    const z2 = this._sp * y + this._cp * z1;
+
+    const d = this.sliceDist3 - z2;
+    if (d < 0.3) return null;
+    const k = (this.focal3 / d) * this.sliceZoom;
+    return { x: this.cx + x1 * k, y: this.cy - y1 * k, d };
+  }
+
+  /** The 3D cross-section of the cage: a wireframe cube plus a floor grid. */
+  drawSliceRoom() {
+    const ctx = this.ctx;
+    const C = CAGE;
+    const p = (x, y, z) => this.project3(x * C, y * C, z * C);
+
+    const path = new Path2D();
+    for (let i = 0; i < 8; i++) {
+      for (let axis = 0; axis < 3; axis++) {
+        if (i & (1 << axis)) continue;
+        const j = i | (1 << axis);
+        const A = p(i & 1 ? 1 : -1, i & 2 ? 1 : -1, i & 4 ? 1 : -1);
+        const B = p(j & 1 ? 1 : -1, j & 2 ? 1 : -1, j & 4 ? 1 : -1);
+        if (!A || !B) continue;
+        path.moveTo(A.x, A.y);
+        path.lineTo(B.x, B.y);
+      }
+    }
+    ctx.strokeStyle = 'hsla(205, 80%, 60%, 0.10)';
+    ctx.lineWidth = 3.5;
+    ctx.stroke(path);
+    ctx.strokeStyle = 'hsla(205, 90%, 72%, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke(path);
+
+    const grid = new Path2D();
+    const step = C / 5;
+    for (let i = -5; i <= 5; i++) {
+      const t = i * step;
+      const a = this.project3(t, -C, -C);
+      const b = this.project3(t, -C, C);
+      const c = this.project3(-C, -C, t);
+      const d = this.project3(C, -C, t);
+      if (a && b) {
+        grid.moveTo(a.x, a.y);
+        grid.lineTo(b.x, b.y);
+      }
+      if (c && d) {
+        grid.moveTo(c.x, c.y);
+        grid.lineTo(d.x, d.y);
+      }
+    }
+    ctx.strokeStyle = 'hsla(200, 85%, 65%, 0.13)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke(grid);
+  }
+
+  drawSliceAxes() {
+    const ctx = this.ctx;
+    const o = -CAGE * 0.82;
+    const O = this.project3(o, o, o);
+    if (!O) return;
+    const axes = [
+      { dir: [1, 0, 0], hue: 0, label: 'x' },
+      { dir: [0, 1, 0], hue: 130, label: 'y' },
+      { dir: [0, 0, 1], hue: 215, label: 'z' },
+    ];
+    ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    for (const ax of axes) {
+      const P = this.project3(o + ax.dir[0] * 2.6, o + ax.dir[1] * 2.6, o + ax.dir[2] * 2.6);
+      if (!P) continue;
+      ctx.strokeStyle = `hsla(${ax.hue}, 95%, 65%, 0.55)`;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(O.x, O.y);
+      ctx.lineTo(P.x, P.y);
+      ctx.stroke();
+      ctx.fillStyle = `hsla(${ax.hue}, 95%, 78%, 0.8)`;
+      ctx.fillText(ax.label, P.x + 4, P.y + 3);
+    }
+  }
+
+  drawSlice(world) {
+    const ctx = this.ctx;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, this.W, this.H);
+
+    this._prepCamera();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (this.showCage) this.drawSliceRoom();
+    if (this.showAxes) this.drawSliceAxes();
+
+    const items = [];
+    for (const b of world.bodies) {
+      if (b.noRender) continue;
+      items.push({ b, c: this.project3(b.pos[0], b.pos[1], b.pos[2]) });
+    }
+    items.sort((p, q) => (q.c ? q.c.d : -1) - (p.c ? p.c.d : -1));
+
+    for (const it of items) {
+      if (it.b.shape.type === 'glome') this.drawSliceGlome(it.b);
+      else this.drawSliceBox(it.b);
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
+
+  drawSliceBox(b) {
+    const segs = sliceBoxSegments(b, this.sliceW);
+    if (!segs.length) return;
+
+    const path = new Path2D();
+    let drawn = 0;
+    for (const [a, c] of segs) {
+      const A = this.project3(a[0], a[1], a[2]);
+      const B = this.project3(c[0], c[1], c[2]);
+      if (!A || !B) continue;
+      path.moveTo(A.x, A.y);
+      path.lineTo(B.x, B.y);
+      drawn++;
+    }
+    if (!drawn) return;
+
+    const ctx = this.ctx;
+    const hue = b.hue;
+    const dim = b.isStatic ? 0.5 : 1;
+    const sat = b.isStatic ? 55 : 92;
+    const lw = Math.min(2.6, Math.max(0.7, this.zoom * 0.0065));
+
+    ctx.strokeStyle = `hsla(${hue}, ${sat}%, 62%, ${0.09 * dim})`;
+    ctx.lineWidth = lw * 3.6;
+    ctx.stroke(path);
+    ctx.strokeStyle = `hsla(${hue}, ${sat}%, 76%, ${0.85 * dim})`;
+    ctx.lineWidth = lw;
+    ctx.stroke(path);
+  }
+
+  drawSliceGlome(b) {
+    const g = sliceGlome(b, this.sliceW);
+    if (!g) return;
+
+    const ctx = this.ctx;
+    const segs = 44;
+    const lw = Math.max(0.7, this.zoom * 0.0045);
+    for (const [i, j] of [
+      [0, 1],
+      [0, 2],
+      [1, 2],
+    ]) {
+      let started = false;
+      ctx.beginPath();
+      for (let k = 0; k <= segs; k++) {
+        const t = (k / segs) * Math.PI * 2;
+        const p = [g.center[0], g.center[1], g.center[2]];
+        p[i] += Math.cos(t) * g.radius;
+        p[j] += Math.sin(t) * g.radius;
+        const q = this.project3(p[0], p[1], p[2]);
+        if (!q) {
+          started = false;
+          continue;
+        }
+        if (started) ctx.lineTo(q.x, q.y);
+        else {
+          ctx.moveTo(q.x, q.y);
+          started = true;
+        }
+      }
+      ctx.strokeStyle = `hsla(${b.hue}, 92%, 74%, 0.55)`;
+      ctx.lineWidth = lw * 3;
+      ctx.stroke();
+      ctx.strokeStyle = `hsla(${b.hue}, 95%, 82%, 0.9)`;
+      ctx.lineWidth = lw;
+      ctx.stroke();
     }
   }
 }

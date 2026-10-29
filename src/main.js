@@ -6,7 +6,7 @@
 // just draws whatever the latest state is.
 // ---------------------------------------------------------------------------
 
-import { World, populateDemo } from './world.js';
+import { World, populateDemo, CAGE } from './world.js';
 import { Renderer4 } from './render4.js';
 
 const DT = 1 / 60;
@@ -50,6 +50,9 @@ const ui = {
   tgTrails: $('tgTrails'),
   tgCage: $('tgCage'),
   tgAxes: $('tgAxes'),
+  tgSlice: $('tgSlice'),
+  slice: $('slice'),
+  valSlice: $('valSlice'),
   toast: $('toast'),
 };
 
@@ -59,7 +62,9 @@ const sliders = [
   { el: ui.fric, out: ui.valFric, fmt: (v) => v.toFixed(2) },
   { el: ui.time, out: ui.valTime, fmt: (v) => `${v.toFixed(2)}×` },
   { el: ui.spin, out: ui.valSpin, fmt: (v) => `${v.toFixed(2)}×` },
+  { el: ui.slice, out: ui.valSlice, fmt: (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}` },
 ];
+const sliceSlider = sliders[sliders.length - 1];
 
 let paused = false;
 let accumulator = 0;
@@ -86,6 +91,7 @@ function applySettings() {
   world.setFriction(Number(ui.fric.value));
   timeScale = Number(ui.time.value);
   renderer.spinScale = Number(ui.spin.value);
+  renderer.sliceW = Number(ui.slice.value);
   for (const s of sliders) syncSlider(s);
 }
 
@@ -173,6 +179,21 @@ function toggleAxes() {
   setChip(ui.tgAxes, renderer.showAxes);
 }
 
+function setSlice(v) {
+  const w = Math.min(CAGE, Math.max(-CAGE, v));
+  ui.slice.value = String(w);
+  renderer.sliceW = w;
+  syncSlider(sliceSlider);
+}
+
+function toggleSlice() {
+  renderer.sliceMode = !renderer.sliceMode;
+  setChip(ui.tgSlice, renderer.sliceMode);
+  ui.slice.disabled = !renderer.sliceMode;
+  if (renderer.sliceMode) toast(`3D slice at w = ${renderer.sliceW.toFixed(2)}`);
+  else toast('4D projection');
+}
+
 function togglePanel() {
   const hide = !ui.panel.classList.contains('hidden');
   ui.panel.classList.toggle('hidden', hide);
@@ -202,6 +223,10 @@ function updateStats() {
 }
 
 // --- input: panel -----------------------------------------------------------
+
+// Keep the slice slider range tied to the room size.
+ui.slice.min = String(-CAGE);
+ui.slice.max = String(CAGE);
 
 for (const s of sliders) {
   syncSlider(s);
@@ -252,6 +277,10 @@ ui.tgAxes.addEventListener('click', () => {
   toggleAxes();
   ui.tgAxes.blur();
 });
+ui.tgSlice.addEventListener('click', () => {
+  toggleSlice();
+  ui.tgSlice.blur();
+});
 
 // --- input: keyboard --------------------------------------------------------
 
@@ -293,6 +322,9 @@ window.addEventListener('keydown', (e) => {
     case 'KeyA':
       if (!e.repeat) toggleAxes();
       break;
+    case 'KeyX':
+      if (!e.repeat) toggleSlice();
+      break;
     case 'KeyS':
       if (!e.repeat) toggleSpin();
       break;
@@ -325,6 +357,12 @@ canvas.addEventListener('pointermove', (e) => {
 
   const k = 0.0055;
   const comp = [0, 0, 0, 0, 0, 0];
+  if (renderer.sliceMode) {
+    // The slice view is an ordinary 3D camera: drag orbits yaw/pitch directly.
+    renderer.yaw += dx * k;
+    renderer.pitch = Math.max(-1.35, Math.min(1.35, renderer.pitch + dy * k));
+    return;
+  }
   if (e.shiftKey) {
     comp[0] = dx * k; // xy
     comp[3] = dy * k; // yz
@@ -349,6 +387,10 @@ canvas.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();
+    if (renderer.sliceMode) {
+      setSlice(renderer.sliceW - e.deltaY * 0.004);
+      return;
+    }
     renderer.dist4 = Math.min(9.5, Math.max(2.5, renderer.dist4 + e.deltaY * 0.0016));
   },
   { passive: false }

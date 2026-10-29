@@ -392,6 +392,11 @@ body {
   margin-bottom: 0;
 }
 
+.slider input:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .slider-top {
   display: flex;
   align-items: baseline;

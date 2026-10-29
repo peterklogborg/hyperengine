@@ -115,14 +115,20 @@
           <button id="tgTrails" class="chip on" type="button" aria-pressed="true">trails</button>
           <button id="tgCage" class="chip on" type="button" aria-pressed="true">cage</button>
           <button id="tgAxes" class="chip on" type="button" aria-pressed="true">axes</button>
+          <button id="tgSlice" class="chip" type="button" aria-pressed="false">3D slice</button>
         </div>
+
+        <label class="slider">
+          <span class="slider-top"><span>slice w</span><span class="slider-val" id="valSlice">+0.00</span></span>
+          <input id="slice" type="range" min="-6.4" max="6.4" step="0.02" value="0" disabled />
+        </label>
       </section>
 
       <footer class="panel-foot">
         <div class="legend">
           <span><b>drag</b> rotate xw / yw</span>
           <span><b>shift+drag</b> xy / yz</span>
-          <span><b>wheel</b> 4D depth</span>
+          <span><b>wheel</b> 4D depth / slice</span>
         </div>
         <div class="keys">
           <span><kbd>space</kbd> pause</span>
@@ -130,6 +136,7 @@
           <span><kbd>G</kbd> gravity</span>
           <span><kbd>1</kbd><kbd>2</kbd> spawn</span>
           <span><kbd>F</kbd> shock</span>
+          <span><kbd>X</kbd> slice</span>
           <span><kbd>H</kbd> hide</span>
         </div>
       </footer>

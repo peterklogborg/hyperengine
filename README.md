@@ -36,10 +36,16 @@ Then open <http://localhost:8000>. Any static server works (`npx serve`,
 | `F` | fire a 4D shockwave |
 | `H` | hide / show the panel |
 | `T` / `C` / `A` / `S` | trails / cage / axes / 4D drift |
+| `X` | toggle the 3D slice view |
 
 The panel exposes gravity, bounciness, friction, time scale and drift speed,
 plus pause, single-step and reset. Every spawned body is a new random rigid
 body with its own inertia tensor.
+
+Turning on **3D slice** swaps the nested projection for a true cross-section:
+the `slice w` slider (or the wheel) moves the hyperplane `w = const` through the
+room, and you see only the matter that plane cuts through. Drag orbits the
+ordinary 3D camera in that mode.
 
 ## What is actually 4D
 
@@ -82,6 +88,14 @@ body with its own inertia tensor.
   hyper-boxes glow through each other as their fourth-coordinate ordering
   changes.
 
+- **Slice view.** The second camera mode drops the R⁴ → R³ step entirely and
+  intersects the world with the hyperplane `w = sliceW` instead. Hyper-boxes
+  are cut face by face (the 24 square faces of the tesseract are clipped to the
+  plane, then de-duplicated into 3D segments); a glome of radius `r` becomes the
+  2-sphere `|x - p|² = r² - (p_w - w)²`, drawn as three great circles. Move the
+  slider while the sim runs and bodies appear from nothing at one `w`, swell,
+  then vanish at another: the 4D analogue of a 3D scene sliced by a plane.
+
 ## Project layout
 
 ```
@@ -105,8 +119,8 @@ node tests/physics.test.mjs
 
 The suite covers rotation validity, the angular-velocity/rotation derivative
 relation, bivector round-trips, positive-definite inertia, torque-free energy
-and momentum conservation, elastic collisions, resting contact, a 20-second
-run of the full demo scene, and stacking stability.
+and momentum conservation, elastic collisions, resting contact, 3D slice
+cross-sections, a 20-second run of the full demo scene, and stacking stability.
 
 On a laptop-class CPU the demo scene (29 bodies, roughly 100 live contacts)
 steps in about a millisecond per 1/60 s frame.
